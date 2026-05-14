@@ -1,701 +1,797 @@
 # EYECORE TikTok Downloader — Tài liệu Kỹ thuật Siêu Chi tiết
 
-> **Phiên bản**: v10.4.0-TURBO-FULL  
+> **Phiên bản**: v10.5.0-TURBO-FULL  
 > **Stack**: Python 3.10+ / Flask / FFmpeg / Vanilla JS  
 > **Cổng mặc định**: `2110`  
-> **Giấy phép**: Nội bộ — EYECORE Team
+> **Tổng dòng code**: ~9.700 (app.py) + ~9.400 (index.html)
 
 ---
 
 ## Mục lục
 
-1. [Tổng quan hệ thống](#1-tổng-quan-hệ-thống)
-2. [Kiến trúc tổng thể](#2-kiến-trúc-tổng-thể)
-3. [Cài đặt & Khởi chạy](#3-cài-đặt--khởi-chạy)
-4. [Cấu hình hệ thống](#4-cấu-hình-hệ-thống)
-5. [Pipeline tải video](#5-pipeline-tải-video)
-6. [Xử lý FFmpeg & Video](#6-xử-lý-ffmpeg--video)
-7. [Giao thức truyền tải THUNDERWAVE™](#7-giao-thức-truyền-tải-thunderwave)
-8. [EYECORE KeepLink™ — Duy trì kết nối](#8-eyecore-keeplink--duy-trì-kết-nối)
-9. [EYECORE Realtime Push Channel™](#9-eyecore-realtime-push-channel)
-10. [WebRTC Bridge v1.0](#10-webrtc-bridge-v10)
-11. [Hệ thống xác thực & phân quyền](#11-hệ-thống-xác-thực--phân-quyền)
-12. [Kho lưu trữ (Storage)](#12-kho-lưu-trữ-storage)
-13. [Hàng chờ tải (Queue)](#13-hàng-chờ-tải-queue)
-14. [Tải đồng loạt (Batch)](#14-tải-đồng-loạt-batch)
-15. [AI Chatbot (EYECORE AI)](#15-ai-chatbot-eyecore-ai)
-16. [Admin Dashboard](#16-admin-dashboard)
-17. [Bảo mật hệ thống](#17-bảo-mật-hệ-thống)
-18. [API Reference đầy đủ](#18-api-reference-đầy-đủ)
-19. [Cấu trúc thư mục](#19-cấu-trúc-thư-mục)
-20. [Troubleshooting](#20-troubleshooting)
-21. [Changelog](#21-changelog)
+1. [Tổng quan hệ thống](#1)
+2. [Kiến trúc tổng thể](#2)
+3. [Cài đặt & Khởi chạy](#3)
+4. [Cấu hình & Hằng số](#4)
+5. [Pipeline tải video](#5)
+6. [FFmpeg Pipeline & Video Processing](#6)
+7. [THUNDERWAVE™ Protocol v2.0](#7)
+8. [EYECORE KeepLink™ v3](#8)
+9. [EYECORE Realtime Push Channel™](#9)
+10. [WebRTC Bridge v1.0](#10)
+11. [Background Persist & Checkpoint System](#11)
+12. [Batch Completion Logic — tryResolve](#12)
+13. [Hệ thống xác thực & phân quyền](#13)
+14. [Kho lưu trữ (Storage)](#14)
+15. [Hàng chờ (Queue)](#15)
+16. [Tải đồng loạt (Batch)](#16)
+17. [iOS Delivery](#17)
+18. [AI Chatbot](#18)
+19. [Admin Dashboard](#19)
+20. [Bảo mật hệ thống](#20)
+21. [API Reference đầy đủ](#21)
+22. [Cấu trúc thư mục](#22)
+23. [Troubleshooting](#23)
+24. [Changelog đầy đủ](#24)
 
 ---
 
-## 1. Tổng quan hệ thống
+## 1. Tổng quan hệ thống {#1}
 
-**EYECORE TikTok Downloader** là ứng dụng web tải video TikTok không watermark, chạy hoàn toàn trên máy chủ nội bộ (localhost/LAN). Được xây dựng với mục tiêu:
+**EYECORE TikTok Downloader** là ứng dụng web tải video TikTok không watermark,
+chạy hoàn toàn trên máy chủ nội bộ (localhost/LAN).
 
-- **Tốc độ**: Tải song song 4–8 chiến lược đồng thời, truyền file qua THUNDERWAVE™ Protocol
-- **Độ tin cậy**: Retry tự động 4 lần, 4 chiến lược xử lý FFmpeg khác nhau, validation đa lớp
-- **Thực thời**: SSE (Server-Sent Events) + EYECORE RTPC™ + WebRTC Bridge — không cần F5
-- **Đa thiết bị**: Tối ưu cho iOS, Android, Desktop (Chrome/Firefox/Safari)
-- **Bảo mật**: Session-based auth, rate limiting, behavioral guard, brute-force protection
+### Mục tiêu thiết kế
+
+| Mục tiêu | Giải pháp |
+|----------|-----------|
+| Tốc độ | Race 4–9 APIs song song; THUNDERWAVE™ v2 |
+| Độ tin cậy | S0–S5 truncation recovery; 100% target |
+| Thực thời | RTPC™ + KeepLink™ v3 + WebRTC Bridge |
+| Không mất dữ liệu | Checkpoint system + auto-resume |
+| Đa thiết bị | iOS tappable, Android 4w, Desktop 6–8w |
+| Ít tài nguyên mạng | KeepLink < 1KB/min; THUNDERWAVE queue 1-at-a-time |
 
 ### Tính năng chính
 
-| Tính năng | Mô tả |
-|-----------|-------|
-| Tải đơn | 1 URL → xử lý → tải về ngay |
-| Tải đồng loạt | Tối đa 100 URL/batch, song song |
-| Hàng chờ | Lưu batch, chạy tuần tự theo lịch |
-| Kho lưu trữ | Lưu video server 15 ngày, quota per-user |
-| Thư mục kho | Phân loại video theo thư mục (client-side + server-side) |
-| Logo overlay | Chèn logo/watermark tùy chỉnh lên video |
-| Tắt tiếng | Tải video không có âm thanh |
-| Scale 720p | Tự động upscale video < 720p lên 720p |
-| AI Chatbot | Hỏi đáp về cách dùng, hỗ trợ tiếng Việt |
-| Dark Mode | AI Eye-Protection, tự bật sau 18h |
-| THUNDERWAVE™ | Tải file song song N luồng, ~50MB/s LAN |
-| KeepLink™ | Kết nối không bao giờ bị ngắt |
-| RTPC™ | Cập nhật UI thực thời, không cần F5 |
+| Tính năng | Chi tiết |
+|-----------|----------|
+| Tải đơn | 1 URL → race → FFmpeg → validate → THUNDERWAVE™ |
+| Tải đồng loạt | ≤100 URLs/batch, song song theo hardware tier |
+| Hàng chờ | Nhiều batch chạy tuần tự |
+| Kho lưu trữ | TTL 15 ngày, quota per-user, tự dọn |
+| Thư mục kho | LocalStorage + server metadata 2-way sync |
+| Logo overlay | Custom watermark vị trí/kích thước tùy chỉnh |
+| Scale 720p | Upscale lanczos nếu < 720p, mọi pipeline path |
+| AI Chatbot | Claude API hoặc rule-based, tiếng Việt |
+| Dark Mode | WCAG AA+ contrast, tự bật sau 18h |
+| Checkpoint | Lưu links → resume sau browser đóng |
 
 ---
 
-## 2. Kiến trúc tổng thể
+## 2. Kiến trúc tổng thể {#2}
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     BROWSER (Client)                         │
-│                                                              │
-│  ┌─────────────┐  ┌────────────┐  ┌──────────────────────┐  │
-│  │  index.html │  │ THUNDERWAVE│  │  EYECORE KeepLink™   │  │
-│  │  (UI/UX)    │  │ Client JS  │  │  + RTPC™ + WebRTC    │  │
-│  └──────┬──────┘  └─────┬──────┘  └──────────┬───────────┘  │
-│         │               │                     │              │
-└─────────┼───────────────┼─────────────────────┼─────────────┘
-          │ HTTP/SSE      │ Parallel Range       │ SSE Streams
-          ▼               ▼ Requests             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Flask Server (app.py)                     │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │                   Route Layer (68 routes)             │   │
-│  │  /api/download_async  /api/batch_start               │   │
-│  │  /api/get_result      /api/batch_stream              │   │
-│  │  /api/stream          /api/thunderwave/manifest      │   │
-│  │  /api/realtime/subscribe  /api/keeplink/*             │   │
-│  │  /api/webrtc/*        /api/storage/*                 │   │
-│  │  /api/auth/*          /api/admin/*                   │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────────────┐  ┌────────────────────────────────┐   │
-│  │  Download Engine  │  │      FFmpeg Pipeline           │   │
-│  │  _race_download   │  │  PATH A: stream copy           │   │
-│  │  (4 strategies   │  │  PATH B: encode + scale        │   │
-│  │   in parallel)   │  │  Truncation Recovery (4 strat) │   │
-│  └──────────────────┘  └────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────────────┐  ┌────────────────────────────────┐   │
-│  │   User Storage   │  │   BatchJob / Task System       │   │
-│  │  user_storage/   │  │   TASK_STORE / BATCH_STORE     │   │
-│  │  per-user quota  │  │   ThreadPoolExecutor           │   │
-│  │  TTL 15 ngày     │  │   SSE Queue per job            │   │
-│  └──────────────────┘  └────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────────────────────┐
-│              External APIs (Download Sources)                │
-│  TikWM  │  ssstik.io  │  yt-dlp  │  TikTokApi              │
-│  Cobalt  │  LocoDownloader  │  TTDownloader │  SnapTik      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        BROWSER (Client)                           │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                    JavaScript Modules                        │  │
+│  │                                                              │  │
+│  │  Batch Engine        THUNDERWAVE™ v2   KeepLink™ v3          │  │
+│  │  _fetchAndSave()     Adaptive N-stream  Single SSE           │  │
+│  │  tryResolve()        Queue 1-at-a-time  Watchdog 20s         │  │
+│  │                                                              │  │
+│  │  RTPC™ Client        WebRTC Bridge     Persist Client        │  │
+│  │  storage_update      RTCPeerConn       checkpoint submit     │  │
+│  │  auth_change         DataChannel       mark_done/resume      │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │ HTTP / SSE / Range Requests
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    Flask Server (app.py)                          │
+│                       72 routes                                   │
+│                                                                    │
+│  Download Engine           FFmpeg Pipeline                        │
+│  _race_download()          PATH A: stream copy  (0–1s)           │
+│  4–9 APIs song song        PATH B: encode+scale (1–30s)          │
+│  Retry rotation            S0–S5 truncation recovery             │
+│                            720p upscale tại ensure layer         │
+│                                                                    │
+│  User Storage              Task/Batch System                     │
+│  user_storage/             TASK_STORE / BATCH_STORE              │
+│  _meta.json+folder_id      ThreadPoolExecutor N workers          │
+│  TTL 15 ngày               SSE Queue per BatchJob                │
+│  RTPC broadcast            Background persist (checkpoint)       │
+└──────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+         External APIs: TikWM / yt-dlp / ssstik / TikTokApi /
+                        Cobalt / LocoDownloader / TTDownloader
 ```
 
 ### Luồng dữ liệu chính
 
 ```
-URL Input → check_urls → batch_start → BatchJob.start()
-                                           │
-                              _race_download_to_file()
-                                   (4 APIs song song)
-                                           │
-                              _process_video_file()
-                                   (FFmpeg pipeline)
-                                           │
-                              _ensure_valid_mp4()
-                               (validate 3 lớp)
-                                           │
-                    ┌──────────────────────┤
-                    │                      │
-               download_direct        save_to_storage
-               TASK_STORE[id]         user_storage/
-                    │                      │
-               SSE result event       _push_to_user()
-                    │                   (RTPC™)
-                    ▼
-              THUNDERWAVE™ Client
-              (N parallel streams)
-                    │
-                    ▼
-              Browser: Blob → Save
+URL Input
+  → check_urls (validate + dedup)
+  → persist/submit (checkpoint ONLY — không chạy batch)
+  → batch_start → BatchJob.start()
+       → Phase 1: _race_download_to_file() × N (4-9 APIs song song)
+       → _process_video_file() (FFmpeg: PATH A hoặc PATH B)
+       → _ensure_valid_mp4() (3 lớp + 720p upscale)
+       → save_to_user_storage() → _push_to_user() RTPC
+       → Push SSE result → Client
+  → Client THUNDERWAVE™ v2:
+       → measureSpeed() (512KB probe)
+       → adaptWorkers() (1–8 dựa trên tốc độ + device)
+       → Queue 1-at-a-time
+       → Parallel range-fetch → reassemble → Blob → download
+  → tryResolve(): 4 điều kiện strict
+       → finalizedCount >= total
+       → pendingFetch <= 0
+       → _pendingFileSaves <= 0
+       → allStarted (mọi fetch đã bắt đầu)
+       → "XONG" notification
 ```
 
 ---
 
-## 3. Cài đặt & Khởi chạy
+## 3. Cài đặt & Khởi chạy {#3}
 
 ### Yêu cầu hệ thống
 
-| Thành phần | Yêu cầu tối thiểu | Khuyến nghị |
-|-----------|-------------------|-------------|
+| Thành phần | Tối thiểu | Khuyến nghị |
+|-----------|-----------|-------------|
 | OS | Windows 10 / Ubuntu 20+ / macOS 12+ | Ubuntu 22 LTS |
 | Python | 3.10+ | 3.11+ |
-| RAM | 4 GB | 8 GB+ |
-| Disk | 10 GB (cho storage) | 50 GB+ |
-| CPU | 2 nhân | 8 nhân+ (Ryzen/i7) |
-| FFmpeg | 4.4+ | 6.0+ (với VAAPI/NVENC) |
-| Network | 100 Mbps LAN | 1 Gbps |
+| RAM | 4 GB | 16 GB+ (RAM disk /dev/shm) |
+| Disk | 20 GB | 100 GB+ |
+| CPU | 4 nhân | 8–16 nhân (Ryzen/i7) |
+| FFmpeg | 4.4+ | 6.0+ |
+| Network LAN | 100 Mbps | 1 Gbps (THUNDERWAVE™ 50MB/s) |
 
-### Cài đặt
+### Cài đặt nhanh
 
 ```bash
-# 1. Clone hoặc copy file vào thư mục
-mkdir eyecore_downloader && cd eyecore_downloader
+# Ubuntu/Debian
+sudo apt update && sudo apt install -y ffmpeg python3-pip
+pip install flask flask-cors flask-compress requests httpx yt-dlp psutil TikTokApi
 
-# 2. Cài Python dependencies
-pip install flask flask-cors flask-compress requests httpx yt-dlp \
-            psutil TikTokApi playwright
+# Windows
+pip install flask flask-cors flask-compress requests httpx yt-dlp psutil
+# Cài FFmpeg từ ffmpeg.org, thêm vào PATH
 
-# 3. Cài FFmpeg
-# Ubuntu:
-sudo apt install ffmpeg
-# Windows: Download từ https://ffmpeg.org/download.html, thêm vào PATH
-
-# 4. Khởi chạy
+# Khởi chạy
 python app.py
-```
-
-### Các biến môi trường
-
-```bash
-# Không cần .env — config hardcode trong app.py:
-PORT = 2110                    # Cổng mặc định
-FAST_TMPDIR = /dev/shm        # RAM disk (Linux) hoặc %TEMP%
-USER_STORAGE_DIR = ./user_storage
-SESSION_SECRET = <auto-generated>
+# → http://localhost:2110
 ```
 
 ### Startup log
 
 ```
-════════════════════════════════════════════════════
-⚡ TIKTOK DOWNLOADER TURBO - v10.4.0 — FULL FEATURED + KEEPLINK™
-════════════════════════════════════════════════════
+════════════════════════════════════════════════════════
+⚡ TIKTOK DOWNLOADER TURBO - v10.5.0 — FULL FEATURED
+════════════════════════════════════════════════════════
   FFmpeg  : ✅
-  Encoder : 🚀 h264_vaapi (hoặc 🔵 libx264)
-  CPU     : 8 slots (100% of 8 cores) | FFmpeg threads=8
-  HW Tier : 🟢 STRONG (i5-8th+/i7/Ryzen)
-  KeepLink: 🟢 EYECORE KeepLink™
-  Chunk   : 🟢 Max 64MB chunks → ~50MB/s LAN
+  Encoder : 🚀 h264_vaapi / 🔵 libx264 (fallback)
+  CPU     : 8 slots (100% of 8 cores)
+  HW Tier : 🟢 STRONG — timeout×1.0 — workers=10
+  KeepLink: 🟢 v3 Single-SSE 15s heartbeat
+  Chunk   : 🟢 Max 64MB → ~50MB/s LAN
+  Persist : 🟢 ./pending_persist/
 ```
 
 ---
 
-## 4. Cấu hình hệ thống
-
-### Hằng số quan trọng (app.py)
+## 4. Cấu hình & Hằng số {#4}
 
 ```python
-# ── Storage ──────────────────────────────────────────
-_STORAGE_TTL_DAYS      = 15          # Xóa file sau 15 ngày
-_DEFAULT_QUOTA_BYTES   = 3 GB        # Quota mặc định user thường
-_ADMIN_QUOTA_BYTES     = 100 GB      # Admin = không giới hạn thực tế
+# Network
+PORT                  = 2110
 
-# ── Guest limits ─────────────────────────────────────
-_GUEST_DAILY_LIMIT     = 10          # 10 video/ngày cho khách
+# Storage
+_STORAGE_TTL_DAYS     = 15           # Xóa sau 15 ngày
+_DEFAULT_QUOTA_BYTES  = 3 * 1024**3  # 3 GB/user
+_ADMIN_QUOTA_BYTES    = 100 * 1024**3
 
-# ── Batch ────────────────────────────────────────────
-BATCH_HARD_CAP         = 100         # Tối đa 100 URL/batch
+# Batch
+BATCH_HARD_CAP        = 100          # Max URLs/batch
 
-# ── FFmpeg ───────────────────────────────────────────
-_SIZE_LIMIT_MB         = 50          # File > 50MB → compress
-_CPU_COUNT             = 100% cores  # Tất cả CPU cores
-HW_ENCODER             = auto        # vaapi/nvenc/libx264
+# Guest
+_GUEST_DAILY_LIMIT    = 10           # 10 video/ngày
 
-# ── Chunk sizes (THUNDERWAVE™) ────────────────────────
-CHUNK_64MB  = file > 200MB           # Desktop large
-CHUNK_32MB  = file > 50MB            # Desktop normal
-CHUNK_16MB  = default desktop
-CHUNK_2MB   = mobile Android
-CHUNK_1MB   = Safari / iOS
+# FFmpeg
+_COMPRESS_THRESHOLD_MB = 50          # File > 50MB → nén
+_CPU_COUNT            = min(int(cpu_count * 1.0), 32)  # 100%
+
+# THUNDERWAVE™ chunks
+CHUNK_64MB = file > 200MB   # Desktop large
+CHUNK_32MB = file > 50MB    # Desktop medium
+CHUNK_16MB = default        # Desktop normal
+CHUNK_2MB  = Android        
+CHUNK_1MB  = iOS / Safari   
+
+# KeepLink™ v3
+KL_HEARTBEAT_INTERVAL = 15s  # Server
+KL_CLIENT_WATCHDOG    = 20s  # Client reconnect nếu im > 20s
+
+# ffprobe cache
+_FFPROBE_CACHE_TTL    = 30s
+_FFPROBE_MAX_CACHE    = 200 entries
 ```
 
 ### Hardware Tier Detection
 
-App tự phát hiện tier phần cứng và điều chỉnh timeout/workers:
-
-| Tier | Phần cứng | FFmpeg timeout | Workers |
-|------|-----------|---------------|---------|
-| 0 — WEAK | Celeron, Atom, < 4 nhân | × 2.5 | 3 |
-| 1 — MEDIUM | i3, i5 cũ, < 8 nhân | × 1.5 | 6 |
-| 2 — STRONG | i5-8th+, i7, Ryzen | × 1.0 | 10 |
+| Tier | Phần cứng | Timeout | Workers |
+|------|-----------|---------|---------|
+| 0 WEAK | Celeron, Atom, ≤2 nhân | ×2.5 | 3 |
+| 1 MEDIUM | i3, i5 cũ, ≤4 nhân | ×1.5 | 6 |
+| 2 STRONG | i5-8th+, i7, Ryzen | ×1.0 | 10 |
 
 ---
 
-## 5. Pipeline tải video
+## 5. Pipeline tải video {#5}
 
-### 5.1 Chiến lược tải (Race Download)
-
-Khi tải 1 video, hệ thống chạy **4 API song song** và lấy kết quả nhanh nhất:
+### 5.1 Race Download
 
 ```
-URL ──┬── Strategy 1: TikWM API          ─┐
-      ├── Strategy 2: ssstik.io           ├── _race_download_to_file()
-      ├── Strategy 3: yt-dlp              ├── → Lấy kết quả NHANH NHẤT
-      └── Strategy 4: TikTokApi / Cobalt ─┘
-```
-
-Các nguồn tải được thử theo thứ tự ưu tiên:
-
-```python
-_DOWNLOAD_PRIORITY_LIST = [
-    get_tiktok_info_mobile_api,        # Mobile API (nhanh nhất)
-    get_tiktok_info_tikwm,             # TikWM (tin cậy)
-    get_tiktok_info_ytdlp,             # yt-dlp (fallback)
-    get_tiktok_info_ssstik,            # ssstik.io
-    get_tiktok_info_cobalt,            # Cobalt
-    get_tiktok_info_tiktokapi,         # TikTokApi (Python)
-    get_tiktok_info_locodownloader,    # LocoDownloader
-    get_tiktok_info_ttdownloader,      # TTDownloader
-    get_tiktok_info_snaptik,           # SnapTik
-]
+URL
+ ├─ Mobile API    ─┐
+ ├─ TikWM API      │  Song song, lấy kết quả
+ ├─ yt-dlp         ├─ NHANH NHẤT
+ ├─ ssstik.io      │
+ └─ Cobalt/...    ─┘
+         │
+         ▼ Nếu tất cả fail:
+ _download_with_rotation_retry()
+   → Thử từng API 1 lần, vòng xoay, tối đa 5 rounds
 ```
 
 ### 5.2 Retry Logic
 
 ```
-Attempt 1 → Race download → nếu fail
-Attempt 2 → Race + thông báo retry
-Attempt 3 → Race + delay 1.5s
-Attempt 4 → Race + delay 3s
-
-Sau 4 lần fail → _download_with_rotation_retry()
-  → Thử từng API một theo danh sách xoay vòng
-  → Tối đa 5 lần rotation
+Attempt 1: race download
+Attempt 2: race + notify retry
+Attempt 3: race + delay 1.5s
+Attempt 4: rotation retry × 5
+  → Vẫn fail → errCount++ (nhưng batch tiếp tục)
 ```
 
-### 5.3 Parallel Chunk Download (cho file lớn)
+### 5.3 Parallel Chunk Download (file lớn)
 
 ```python
-# Trong _download_via_chunks():
-CHUNK_WORKERS = {
-    HW_TIER_STRONG: 10,   # 10 luồng song song
-    HW_TIER_MEDIUM: 6,
-    HW_TIER_WEAK:   3,
-}
+# _download_via_chunks()
+workers = {STRONG: 10, MEDIUM: 6, WEAK: 3}[hardware_tier]
+# N concurrent range-requests → merge → lưu disk
 ```
 
 ---
 
-## 6. Xử lý FFmpeg & Video
+## 6. FFmpeg Pipeline & Video Processing {#6}
 
-### 6.1 Pipeline xử lý (_process_video_file)
+### 6.1 PATH A vs PATH B
 
 ```
-raw_path (file thô từ API)
+Probe: _probe_once() → {codec, w, h, fps, duration, size}
     │
-    ├── PRE-STEP: Sanitize (nếu codec=none / container broken)
-    │     └── _sanitize_video_for_ffmpeg()
+    ├─ PATH A — Stream Copy (0–1s)
+    │   Điều kiện: codec=H264 AND short_side≥720
+    │              AND không logo AND không nén
+    │   └─ Trả thẳng raw_path
     │
-    ├── Probe info: _probe_once()
-    │     ├── width, height, fps, has_audio, duration, size
-    │     └── vcodec (h264/hevc/none/av1...)
-    │
-    ├── PATH A: Stream Copy (không cần encode)
-    │     Điều kiện: H264 + ≥720p + không cần logo + không cần compress
-    │     └── Trả thẳng raw_path (0–1s)
-    │
-    └── PATH B: Encode (1–30s tùy video)
-          ├── Scale 720p: scale=-2:720:flags=lanczos (upscale)
-          ├── Logo overlay: filter_complex
-          ├── Compress: CRF=23, preset=ultrafast
-          ├── Transcode: → H264 libx264 / vaapi / nvenc
-          ├── VFR fix: -fflags +genpts+igndts+discardcorrupt
-          └── Validate output: _validate_ffmpeg_output()
+    └─ PATH B — Full Encode (1–30s)
+        ├─ Scale: scale=-2:720:flags=lanczos (nếu <720p)
+        ├─ Logo: filter_complex overlay
+        ├─ Compress: CRF=23 preset=ultrafast
+        ├─ Transcode: H264 (vaapi/nvenc/qsv/libx264)
+        └─ Validate: _validate_ffmpeg_output()
 ```
 
-### 6.2 Input Flags Tối ưu (v2)
+### 6.2 Input Flags Robust (v2)
 
 ```bash
 ffmpeg -y \
-  -probesize 100M \           # Đọc đủ dữ liệu container
-  -analyzeduration 10M \      # Phân tích 10s đầu
+  -probesize 100M \            # Đọc đủ container
+  -analyzeduration 10M \       # Phân tích 10s đầu
   -fflags +genpts+igndts+discardcorrupt+fastseek \
-  -err_detect ignore_err \    # Bỏ qua packet corrupt
-  -max_error_rate 1.0 \       # Không dừng dù nhiều error
+  -err_detect ignore_err \
+  -max_error_rate 1.0 \
+  -ignore_unknown \            # Bỏ qua streams lạ
   -avoid_negative_ts make_zero \
-  -i input.mp4 \
-  ...
+  -i input.mp4 ...
 ```
 
-### 6.3 Truncation Recovery — 4 Chiến lược
+### 6.3 Truncation Recovery — 6 Strategies (S0→S5)
 
-Khi FFmpeg tạo ra output bị cắt ngắn (`ratio < 25%`):
+Kích hoạt khi: `output_duration / input_duration < 25%`
 
-```
-S1: genpts + copyts + vsync vfr
-    └── Bảo toàn timestamps gốc, xử lý PTS jump
+| Strategy | Kỹ thuật | Mục đích |
+|----------|----------|----------|
+| **S0** | Pre-repair: `-c copy -ignore_unknown` → overwrites raw | Fix container trước encode |
+| S1 | `genpts + copyts + vsync vfr` | Fix PTS/DTS |
+| S2 | Re-remux → MKV → encode lại | Fix broken container |
+| S3 | Force `-t [duration]` từ stream probe | Fix PTS gap |
+| S4 | Brute force `probesize=500M`, accept > 50KB | Tất cả fail |
+| **S5** | Trả raw file nếu ffprobe validates | Last resort: không bao giờ fail hoàn toàn |
 
-S2: Re-remux → MKV (loại bỏ container broken) → encode
-    └── ffmpeg -c copy → .mkv → encode lại
-
-S3: Force -t [duration] (ép đúng thời lượng)
-    └── Lấy duration từ stream probe, không từ container
-
-S4: Brute force (probesize=500M, chấp nhận output > 50KB)
-    └── Tốt hơn fail hoàn toàn — user nhận video ngắn hơn
-```
-
-### 6.4 _ensure_valid_mp4 (3 lớp kiểm tra)
+### 6.4 `_ensure_valid_mp4` — 3 Lớp
 
 ```
-Layer 1: ffprobe check
-    ├── Kiểm tra codec H264
-    ├── Kiểm tra width/height hợp lệ
-    ├── Nếu < 720p → upscale lên 720p (lanczos)
-    └── Nếu không phải H264 → sang Layer 2
+Layer 1: ffprobe
+  ├─ codec = H264 + w/h valid?
+  ├─ short_side < 720 → upscale lanczos (720p fix)
+  └─ Không phải H264 → Layer 2
 
-Layer 2: re-encode ultrafast H264
-    └── libx264 CRF=23 ultrafast → file playable
+Layer 2: re-encode ultrafast
+  └─ probesize=200M -ignore_unknown CRF=23 ultrafast
+     tune=zerolatency
 
-Layer 3: remux (copy container)
-    └── ffmpeg -c copy → MP4 mới với faststart
+Layer 3: remux
+  └─ -c copy -movflags +faststart
 ```
 
 ### 6.5 ffprobe Cache
 
 ```python
-_ffprobe_cache: dict = {}  # filepath → (result: bool, timestamp)
-_FFPROBE_CACHE_TTL = 30    # giây
-
-# Tránh gọi ffprobe lặp lại cho cùng file trong 30s
-# Cache tự dọn khi > 200 entries
+_ffprobe_cache: dict  # filepath → (result: bool, timestamp)
+_FFPROBE_CACHE_TTL = 30s
+# Tránh gọi ffprobe lặp cho cùng file trong 30s
+# Auto-evict khi > 200 entries
 ```
 
-### 6.6 Detect Hardware Encoder
+### 6.6 Hardware Encoder
 
-```python
-# Thử theo thứ tự:
-1. h264_vaapi  (Intel iGPU / AMD GPU trên Linux)
-2. h264_nvenc  (NVIDIA GPU)
-3. h264_qsv    (Intel Quick Sync)
-4. libx264     (Software fallback — luôn hoạt động)
+```
+Thứ tự: h264_vaapi → h264_nvenc → h264_qsv → libx264 (luôn hoạt động)
 ```
 
 ---
 
-## 7. Giao thức truyền tải THUNDERWAVE™
+## 7. THUNDERWAVE™ Protocol v2.0 {#7}
 
 > **Tên đầy đủ**: Total High-speed Unified Network Data Extraction R-architecture with Windowed Adaptive Velocity Engine™  
-> **Phiên bản**: 1.0  
-> **Mục tiêu**: 50MB/s trên LAN cho mọi thiết bị
+> **Version**: 2.0 | **Target**: 50MB/s LAN, ít tài nguyên, 1 video tại 1 thời điểm
 
-### 7.1 Cách hoạt động
+### 7.1 So sánh v1.0 vs v2.0
+
+| | v1.0 | v2.0 |
+|--|------|------|
+| Workers | Cố định 6–8 | **Adaptive: đo speed → 1–6** |
+| Concurrency | N videos song song | **1 video tại 1 thời điểm** |
+| Speed probe | Không | **512KB probe → MB/s thực** |
+| Network usage | Cao | **Thấp (queue 1-at-a-time)** |
+| iOS | `window.open()` (bị block) | **Direct `<a href>` tappable** |
+| Queue | Không | **FIFO, `_processQueue()`** |
+
+### 7.2 Adaptive Worker Algorithm
+
+```javascript
+// 1. Đo tốc độ thực (512KB probe)
+async function _measureSpeed(url) {
+    const t0  = Date.now();
+    const res = await fetch(url, {
+        headers: { 'Range': 'bytes=0-524287' },
+        signal: AbortSignal.timeout(3000),
+    });
+    await res.arrayBuffer();
+    const elapsed = (Date.now() - t0) / 1000;
+    return Math.round((524288 / elapsed) / (1024 * 1024)); // MB/s
+}
+
+// 2. Quyết định workers dựa trên speed + device
+function _adaptWorkers(speedMBs, fileSize) {
+    if (iOS)              return 1;  // Safari single stream
+    if (speedMBs >= 50)   return 6;  // Fast LAN → 6 streams
+    if (speedMBs >= 20)   return 4;  // Medium → 4 streams
+    if (speedMBs >= 10)   return 2;  // Slow → 2 streams
+    return 1;                        // Very slow → single
+}
+```
+
+### 7.3 Queue: Không Flood Network
+
+```javascript
+// Batch 5 videos: tải tuần tự, không song song
+const _queue = [];
+let _running = false;
+
+async function _processQueue() {
+    if (_running || _queue.length === 0) return;
+    _running = true;
+    while (_queue.length > 0) {
+        const job = _queue.shift();
+        await job();  // Video N xong → Video N+1 bắt đầu
+    }
+    _running = false;
+}
+```
+
+### 7.4 Parallel Range Fetch (trong 1 video)
 
 ```
-Client                              Server
-  │                                    │
-  │── GET /api/thunderwave/manifest ──▶│
-  │◀─ {workers, ranges[], size, ...} ──│
-  │                                    │
-  │── [Worker 0] Range: bytes=0-16M ──▶│
-  │── [Worker 1] Range: bytes=16M-32M ▶│  ← Song song
-  │── [Worker 2] Range: bytes=32M-48M ▶│  ← Song song
-  │── [Worker N] Range: bytes=48M-end ▶│  ← Song song
-  │                                    │
-  │◀─ [Chunk 0] 16MB binary ───────────│
-  │◀─ [Chunk 1] 16MB binary ───────────│  ← Nhận đồng thời
-  │◀─ [Chunk 2] 16MB binary ───────────│
-  │◀─ [Chunk N] ...binary ─────────────│
-  │                                    │
-  │── Reassemble in memory ────────────│
-  │── Blob → Download ─────────────────│
+Client                           Server
+  │                                │
+  │─── GET manifest/<task_id> ────▶│
+  │◀── {workers:4, ranges:[...]} ──│
+  │                                │
+  │─── [W0] Range: 0–13MB ────────▶│
+  │─── [W1] Range: 13–26MB ───────▶│ ← Song song TRONG 1 video
+  │─── [W2] Range: 26–39MB ───────▶│
+  │─── [W3] Range: 39–52MB ───────▶│
+  │                                │
+  │◀── Chunk 0 ────────────────────│
+  │◀── Chunk 1 ────────────────────│ ← ~50MB/s tổng
+  │◀── Chunk 2 ────────────────────│
+  │◀── Chunk 3 ────────────────────│
+  │                                │
+  │─── Reassemble → Blob → Save ───│
 ```
 
-### 7.2 Adaptive Workers
-
-| Device | Workers | Lý do |
-|--------|---------|-------|
-| iOS Safari | 1 | Safari iOS giới hạn concurrent connections |
-| Android Chrome | 4 | Mobile network stability |
-| Desktop (file > 100MB) | 8 | Maximum throughput |
-| Desktop (file ≤ 100MB) | 6 | Balanced |
-
-### 7.3 API Endpoints
+### 7.5 API Endpoints
 
 ```
 GET /api/thunderwave/manifest/<task_id>
 GET /api/thunderwave/manifest/storage/<filename>
 
-Response:
-{
+Response: {
   "ok": true,
-  "mode": "task" | "storage",
-  "task_id": "abc123",
+  "protocol": "THUNDERWAVE/1.0",
   "filename": "video.mp4",
   "size": 52428800,
-  "workers": 6,
-  "chunk_size": 8738133,
+  "workers": 4,
+  "chunk_size": 13107200,
   "ranges": [
-    {"i": 0, "start": 0, "end": 8738132, "size": 8738133},
-    {"i": 1, "start": 8738133, "end": 17476265, "size": 8738133},
+    {"i":0, "start":0,        "end":13107199, "size":13107200},
+    {"i":1, "start":13107200, "end":26214399, "size":13107200},
     ...
-  ],
-  "mime": "video/mp4",
-  "protocol": "THUNDERWAVE/1.0"
+  ]
 }
 ```
 
-### 7.4 Client Implementation (JavaScript)
+---
+
+## 8. EYECORE KeepLink™ v3 {#8}
+
+> Single SSE, watchdog 20s, < 1KB/min bandwidth
+
+### 8.1 So sánh v2 vs v3
+
+| | v2 | v3 |
+|--|----|----|
+| HTTP ping | Mỗi 4–12s | **Không có** |
+| SSE connections | 2 (ping + keeplink) | **1 duy nhất** |
+| Bandwidth | ~5KB/min | **< 1KB/min** |
+| Server heartbeat | 2s | **15s** |
+| Client watchdog | Không | **✅ 20s** |
+| Backoff | 1→2→4→8s | **2→4→8→16s** |
+| Code phức tạp | HTTP ping + SSE stream | **Chỉ SSE** |
+
+### 8.2 Client Logic
 
 ```javascript
-// Sử dụng THUNDERWAVE™
-const data = await window.THUNDERWAVE.download(taskId, filename, fileSize, {
-    onProgress: (received, total) => {
-        updateProgressBar(received / total * 100);
+(function _initKeepLink() {
+    let _klES    = null;
+    let _klFails = 0;
+    let _klLastHB = 0;
+
+    function _klConnect() {
+        _klES = new EventSource('/api/keeplink/stream?sid=' + KL_SID);
+
+        _klES.onopen = () => { _klLastHB = Date.now(); };
+        _klES.addEventListener('kl_heartbeat', () => {
+            _klFails  = 0;
+            _klLastHB = Date.now();
+            // → status dot green
+        });
+        _klES.onerror = () => {
+            _klFails++;
+            // Backoff: 2→4→8→16s + jitter 300ms
+            const delay = Math.min(16000, 2000 * 2 ** (_klFails - 1));
+            setTimeout(_klConnect, delay + Math.random() * 300);
+        };
     }
-});
-const blob = new Blob([data], { type: 'video/mp4' });
-// → Trigger browser save
+
+    // Watchdog: nếu im > 20s → reconnect
+    setInterval(() => {
+        if (_klLastHB && Date.now() - _klLastHB > 20000) {
+            _klES.close();
+            _klConnect();
+        }
+    }, 5000);
+
+    // Tab visible lại → reconnect ngay
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && _klES.readyState === CLOSED)
+            setTimeout(_klConnect, 200);
+    });
+})();
 ```
 
----
-
-## 8. EYECORE KeepLink™ — Duy trì kết nối
-
-> **Mục tiêu**: Không bao giờ bị ngắt kết nối, phục hồi < 300ms sau gián đoạn
-
-### 8.1 Cơ chế hoạt động
-
-```
-Client                           Server
-  │                                 │
-  │── Ping mỗi 4–12s (adaptive) ──▶│
-  │◀─ {pong, server_load, hint} ────│
-  │                                 │
-  │══ SSE /api/keeplink/stream ════▶│
-  │◀═ kl_heartbeat mỗi 2s ══════════│
-  │                                 │
-  │  [Tab ẩn] → ping ngay khi hiện lại
-  │  [Server tải cao] → giảm interval
-  │  [Miss 3 ping] → reconnect với jitter backoff
-```
-
-### 8.2 Progressive Reconnect
-
-```javascript
-// Backoff: 1s → 2s → 4s → 8s (cộng jitter 0–500ms)
-const delay = Math.min(8000, 1000 * Math.pow(2, missedCount));
-const jitter = Math.random() * 500;
-setTimeout(reconnect, delay + jitter);
-```
-
-### 8.3 Server Load Awareness
+### 8.3 Server
 
 ```python
-# Server tính load từ batch + task đang chạy
-server_load = min(100, active_batches * 15 + active_tasks * 5)
-
-# Gợi ý interval:
-interval_hint = 4s if load > 50% else 8s
+@app.route('/api/keeplink/stream')
+def keeplink_stream():
+    def _gen():
+        while True:
+            yield _sse('kl_heartbeat', {'ts': int(time.time()*1000)})
+            time.sleep(15)   # 15s = < 1KB/min
+    return Response(stream_with_context(_gen()), ...)
 ```
-
-### 8.4 API Endpoints
-
-```
-GET/POST /api/keeplink/ping?sid=<session_id>
-  Response: {pong, ts, server_load, interval_hint, sessions}
-
-GET /api/keeplink/stream?sid=<session_id>
-  SSE stream: kl_heartbeat mỗi 2s
-```
-
-### 8.5 Status Indicator
-
-Dot nhỏ màu trong header:
-- 🟢 Xanh: kết nối ổn định
-- 🟡 Vàng: đang kết nối
-- 🔴 Đỏ: mất kết nối, đang reconnect
 
 ---
 
-## 9. EYECORE Realtime Push Channel™
+## 9. EYECORE Realtime Push Channel™ {#9}
 
-> **RTPC™** — Cập nhật UI không cần F5, push từ server tới TẤT CẢ tab của user
+> Push mọi state change đến TẤT CẢ tabs của user — không cần F5
 
-### 9.1 Events được push
+### 9.1 Events
 
-| Event | Khi nào | Hành động client |
-|-------|---------|-----------------|
-| `storage_update` | File được lưu/xóa | Refresh storage tab |
-| `auth_change` | Đăng nhập/đăng xuất | Re-check auth |
-| `system_notice` | Thông báo admin | Toast notification |
+| Event | Trigger server | Client action |
+|-------|---------------|--------------|
+| `storage_update` | save/delete file | Refresh tab + badge + folder |
+| `auth_change` | login/logout | Re-auth + resume pending |
+| `system_notice` | Admin message | Toast notification |
 | `rt_heartbeat` | Mỗi 12s | Keep-alive |
-| `rt_connected` | Khi kết nối | Log |
+| `rt_connected` | Subscribe | Log |
 
-### 9.2 Subscribe endpoint
-
-```
-GET /api/realtime/subscribe  (yêu cầu đăng nhập)
-SSE stream: mỗi user có hàng đợi riêng
-```
-
-### 9.3 Server broadcast
+### 9.2 Auto-patched Functions
 
 ```python
-# Push đến tất cả tab của user
-_push_to_user(username, 'storage_update', {
-    'action': 'add',
-    'filename': 'video.mp4',
-    'folder_id': 'folder123',
-    'used': 1024000,
-})
+# save_to_user_storage() được monkey-patch:
+def save_to_user_storage(...):
+    result = _orig_save_to_user_storage(...)
+    if result.get('ok'):
+        _push_to_user(username, 'storage_update', {
+            'action': 'add',
+            'filename': filename,
+            'folder_id': folder_id,
+            'used': result.get('used', 0),
+        })
+    return result
+
+# delete_from_user_storage() tương tự
 ```
 
-### 9.4 Tích hợp với Storage
-
-Khi lưu file vào kho:
-1. `save_to_user_storage()` lưu metadata + `folder_id`
-2. Auto-broadcast `storage_update` qua RTPC™
-3. Client nhận → gán folder_id trong localStorage → refresh list
-4. Không cần F5, không cần polling
-
----
-
-## 10. WebRTC Bridge v1.0
-
-> Cơ sở hạ tầng WebRTC signaling — sẵn sàng cho peer-to-peer trong tương lai
-
-### 10.1 Architecture
-
-```
-Browser ←──── THUNDERWAVE™ ────── Server
-   │                                  │
-   └── WebRTC RTCPeerConnection        │
-       DataChannel (sẵn sàng)         │
-   │                                  │
-   └── /api/webrtc/offer ────────────▶│
-       /api/webrtc/ice                 │
-       /api/webrtc/status ◀────────────│
-```
-
-### 10.2 Signaling Flow
+### 9.3 Resume on Login
 
 ```javascript
-// 1. Client tạo offer
-const pc = new RTCPeerConnection({ iceServers: [...] });
-const dc = pc.createDataChannel('thunderwave');
-const offer = await pc.createOffer();
-
-// 2. Gửi lên server
-POST /api/webrtc/offer
-{ sdp: offer.sdp, type: 'offer', task_id: 'abc' }
-
-// 3. Server trả answer (THUNDERWAVE transport)
-{ answer: { sdp: '...', type: 'answer' }, transport: 'THUNDERWAVE/1.0' }
-```
-
-### 10.3 API Endpoints
-
-```
-POST /api/webrtc/offer
-  Body: {sdp, type, task_id, filename}
-  Response: {ok, session_id, answer, transport}
-
-POST /api/webrtc/ice
-  Body: {session_id, candidate}
-
-GET /api/webrtc/status/<session_id>
-  Response: {ok, has_answer, answer, transport, task_id}
+// RTPC handler khi nhận auth_change:
+_rtES.addEventListener('auth_change', () => {
+    fetch('/api/auth/me').then(r => r.json()).then(d => {
+        if (d.logged_in) {
+            // Check pending checkpoints
+            fetch('/api/persist/status').then(r => r.json()).then(ps => {
+                const pending = ps.tasks.filter(t => t.status === 'pending');
+                if (pending.length > 0) {
+                    _toast(`🔄 ${pending.length} lô chưa tải. Đang tiếp tục...`);
+                    fetch('/api/persist/resume', { method: 'POST' });
+                }
+            });
+        }
+    });
+});
 ```
 
 ---
 
-## 11. Hệ thống xác thực & phân quyền
-
-### 11.1 Các vai trò
-
-| Role | Mô tả | Quyền |
-|------|-------|-------|
-| `guest` | Chưa đăng nhập | Tải ≤10 video/ngày, không lưu kho |
-| `user` | Đã đăng nhập | Tải không giới hạn, lưu kho 3GB, batch |
-| `admin` | Quản trị viên | Tất cả + quản lý user + dashboard |
-
-### 11.2 Password Policy
-
-```python
-# Yêu cầu mật khẩu:
-- Độ dài: ≥ 8 ký tự
-- Ít nhất 1 chữ hoa
-- Ít nhất 1 chữ thường
-- Ít nhất 1 số
-- Ít nhất 1 ký tự đặc biệt (!@#$%^&*...)
-```
-
-### 11.3 Brute-force Protection
-
-```python
-# Sau 5 lần login sai:
-_BEHAVIORAL_GUARD.block(ip)
-# Block theo IP, tự unblock sau N phút
-# Admin có thể unblock thủ công qua dashboard
-```
-
-### 11.4 Session
-
-```python
-SESSION_SECRET = auto-generated khi khởi động
-SESSION_LIFETIME = 7 ngày
-```
-
-### 11.5 API Endpoints Auth
+## 10. WebRTC Bridge v1.0 {#10}
 
 ```
-POST /api/auth/register     Đăng ký (admin approve)
-POST /api/auth/login        Đăng nhập
-POST /api/auth/logout       Đăng xuất
-GET  /api/auth/me           Thông tin user hiện tại
-POST /api/auth/change_password  Đổi mật khẩu
+Browser                         Server
+  │                                │
+  ├─ RTCPeerConnection              │
+  ├─ createDataChannel('thunderwave')
+  ├─ createOffer()                  │
+  │                                │
+  ├── POST /api/webrtc/offer ──────▶│
+  │◀── {answer, transport: THUNDERWAVE/1.0}
+  │                                │
+  └─ Transport: THUNDERWAVE™        │
+     (parallel HTTP range requests) │
+```
+
+**Note**: Server-side WebRTC peer đầy đủ yêu cầu `aiortc`. Hiện tại bridge trả answer chỉ định THUNDERWAVE™ transport — cùng tốc độ, không cần STUN/TURN.
+
+### 10.1 API
+
+```
+POST /api/webrtc/offer    {sdp, type, task_id, filename}
+                          → {ok, session_id, answer, transport}
+
+POST /api/webrtc/ice      {session_id, candidate}
+
+GET  /api/webrtc/status/<session_id>
+                          → {ok, has_answer, answer, transport}
 ```
 
 ---
 
-## 12. Kho lưu trữ (Storage)
+## 11. Background Persist & Checkpoint System {#11}
 
-### 12.1 Cấu trúc thư mục
+> Không mất links dù browser đóng giữa chừng
+
+### 11.1 Flow đầy đủ
 
 ```
-user_storage/
-├── admin/
-│   ├── _meta.json          # Metadata tất cả file
-│   ├── video1.mp4
-│   └── video2.mp4
-├── alice/
-│   ├── _meta.json
-│   └── ...
-└── bob/
-    └── ...
+[User click Tải]
+        │
+        ├─ 1. persist/submit
+        │      └─ Lưu checkpoint: pending_persist/{pid}.json
+        │         status = "pending" (KHÔNG chạy batch)
+        │
+        ├─ 2. batch_start (chạy bình thường)
+        │      └─ Hoàn thành → persist/mark_done
+        │         status = "done" → file được xóa/đánh dấu
+        │
+        └─ 3. Nếu browser đóng TRƯỚC khi batch_start xong:
+                Checkpoint vẫn còn status = "pending"
+                        │
+                        └─ Lần sau đăng nhập:
+                           RTPC auth_change → persist/status
+                           → persist/resume (server tạo BatchJob mới)
+                           → download_direct=false (chỉ lưu kho)
+                           → Không cần browser download
 ```
 
-### 12.2 Metadata format (_meta.json)
+### 11.2 Checkpoint Format
 
 ```json
 {
-  "video_abc123.mp4": {
-    "title": "TikTok Video Title",
-    "url": "https://www.tiktok.com/@user/video/...",
+  "pid": "abc123def456",
+  "username": "alice",
+  "name": "Batch sáng 15/01",
+  "urls": ["https://tiktok.com/...", "..."],
+  "audio": true,
+  "logo_params": { "enabled": false },
+  "folder_id": "folder_xyz",
+  "download_direct": true,
+  "save_to_storage": true,
+  "created_at": 1705309800000,
+  "status": "pending | running | done | error",
+  "batch_id": null
+}
+```
+
+### 11.3 API
+
+```
+POST /api/persist/submit      Ghi checkpoint files (không start batch)
+POST /api/persist/mark_done   {pids:[...]} → đánh dấu done
+GET  /api/persist/status      Liệt kê checkpoints của user hiện tại
+POST /api/persist/resume      Resume tất cả pending (server-side BatchJob)
+```
+
+---
+
+## 12. Batch Completion Logic — tryResolve {#12}
+
+> Đây là phần quan trọng nhất — "XONG" chỉ báo khi thực sự xong
+
+### 12.1 Counters
+
+```javascript
+let total           = capturedUrls.length;  // Tổng video
+let finalizedCount  = 0;   // Số video đã kết thúc (ok + fail)
+let pendingFetch    = 0;   // Số fetch đang chạy
+let _fetchStarted   = 0;   // Tổng _fetchAndSave đã khởi động
+// window._pendingFileSaves   // Số blob đang ghi disk
+const processedIndices = new Set();  // Tránh double-process SSE events
+```
+
+### 12.2 tryResolve — 4 Điều kiện STRICT
+
+```javascript
+function tryResolve() {
+    if (_resolved) return;
+
+    const fileSaveDone = (window._pendingFileSaves || 0) <= 0;
+    const allStarted   = _fetchStarted >= total
+                      || processedIndices.size >= total;
+
+    if (  finalizedCount >= total  // [1] Mọi video đã kết thúc
+       && pendingFetch   <= 0      // [2] Không còn fetch active
+       && fileSaveDone             // [3] Không còn ghi disk
+       && allStarted) {            // [4] Mọi fetch đã được khởi động
+        _resolved = true;
+        resolve();   // → "XONG"
+    }
+}
+```
+
+### 12.3 Khi nào `finalizedCount` tăng
+
+| Trường hợp | Tăng khi nào |
+|-----------|-------------|
+| `storage-only` (`download_direct=false`) | Ngay khi SSE result nhận |
+| iOS (tappable link) | Ngay khi link được thêm panel |
+| Desktop `_fetchAndSave` | **SAU KHI** `fetch().blob()` hoàn thành |
+| Error/fail | Ngay khi SSE result nhận |
+| `result_retry` | **KHÔNG tăng thêm** — đã tăng lúc fail lần đầu |
+
+### 12.4 _resolvePoller — Periodic Safety Check
+
+```javascript
+const _resolvePoller = setInterval(() => {
+    if (_resolved) { clearInterval(_resolvePoller); return; }
+    const allEventsIn = processedIndices.size >= total;
+    const allStarted  = _fetchStarted >= total;
+    // Chỉ gọi tryResolve khi CẢ HAI điều kiện này đúng:
+    if (finalizedCount >= total && allEventsIn && allStarted)
+        tryResolve();
+}, 800);
+```
+
+### 12.5 Bugs Đã Fix (v10.5.0)
+
+| Bug | Nguyên nhân | Fix |
+|-----|------------|-----|
+| "Báo xong sớm" #1 | `persist_submit` chạy duplicate batch → RTPC fires sớm | `persist_submit` chỉ lưu checkpoint |
+| "Báo xong sớm" #2 | `result_retry` tăng `finalizedCount` ngay lập tức | Không tăng ở retry (đã tăng lúc fail) |
+| "Báo xong sớm" #3 | `_resolvePoller` không check `allStarted` | Thêm `allEventsIn && allStarted` guards |
+| Storage không hiện | IIFE `storageRefresh` không gọi `storageRenderFiles()` | IIFE version gọi đủ cả 4 functions |
+
+---
+
+## 13. Hệ thống xác thực & phân quyền {#13}
+
+### 13.1 Vai trò
+
+| Role | Giới hạn | Quyền đặc biệt |
+|------|---------|---------------|
+| `guest` | 10 video/ngày | Không |
+| `user` | Không giới hạn + kho 3GB | Batch, queue, storage |
+| `admin` | 100GB storage | Dashboard, quản lý user |
+
+### 13.2 Password Policy
+
+```
+Độ dài ≥ 8 ký tự
+≥ 1 chữ hoa  (A–Z)
+≥ 1 chữ thường (a–z)
+≥ 1 số (0–9)
+≥ 1 ký tự đặc biệt (!@#$%^&*...)
+```
+
+### 13.3 Brute-force Protection
+
+```
+5 lần fail → Block IP (thời gian tự động)
+Admin: POST /api/security/unblock để unblock thủ công
+```
+
+### 13.4 API
+
+```
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me
+POST /api/auth/change_password
+```
+
+---
+
+## 14. Kho lưu trữ (Storage) {#14}
+
+### 14.1 Cấu trúc thư mục
+
+```
+user_storage/
+└── {username}/
+    ├── _meta.json      ← metadata + folder_id
+    └── *.mp4
+```
+
+### 14.2 Metadata (_meta.json)
+
+```json
+{
+  "tiktok_abc123.mp4": {
+    "title": "Video title",
+    "url": "https://tiktok.com/@user/video/...",
     "size": 15728640,
     "saved_at": "2024-01-15T10:30:00",
     "saved_at_ts": 1705309800.0,
@@ -709,350 +805,300 @@ user_storage/
 }
 ```
 
-### 12.3 Hệ thống thư mục
-
-Thư mục là abstraction **client-side** + **server-side đồng bộ**:
+### 14.3 Folder System — 2-way Sync
 
 ```
-Client localStorage:
+Server metadata (persistent across sessions):
+  _meta.json[filename].folder_id = "folder_abc"
+
+Client localStorage (fast UI, offline):
   tikdown_sf_folders: [{id, name, created}]
   tikdown_sf_filemap: {filename: folder_id}
 
-Server metadata:
-  _meta.json[filename].folder_id = "folder_xyz"
-
-Sync flow:
-  1. Server lưu folder_id trong metadata
-  2. Server RTPC broadcast storage_update{folder_id}
-  3. Client _sfAssignFileExplicit(filename, folder_id)
-  4. storageRefresh() → _sfSyncFromServer() → localStorage update
+Sync flow (mỗi storageRefresh):
+  _sfSyncFromServer(files)
+  → Với mỗi file: nếu server folder_id ≠ localStorage → update localStorage
+  → Đảm bảo F5 / tab mới vẫn đúng thư mục
 ```
 
-### 12.4 API Storage
+### 14.4 storageRefresh — Đã Fix v10.5.0
+
+```javascript
+// IIFE version (ghi đè global) giờ gọi đầy đủ:
+window.storageRefresh = async function() {
+    const [infoRes, listRes] = await Promise.all([
+        fetch('/api/storage/info'),
+        fetch('/api/storage/list'),
+    ]);
+    const info = await infoRes.json();
+    const d    = await listRes.json();
+    _allFiles  = d.files || [];
+
+    storageUpdateQuota(info);       // ← [1] Cập nhật quota bar
+    storageRenderFiles(_allFiles);  // ← [2] Render main tab list (BUG FIX!)
+    storageSyncBadge(_allFiles.length); // ← [3] Update badge
+    _sfSyncFromServer(_allFiles);   // ← [4] Sync folder_id
+    _sfRenderSidebar();             // ← [5] Update folder sidebar
+    _sfRenderFiles();               // ← [6] Update folder file list
+};
+```
+
+### 14.5 API
 
 ```
-GET  /api/storage/info              Quota & dung lượng đã dùng
-GET  /api/storage/list              Danh sách file (có folder_id)
-GET  /api/storage/download/<file>   Tải file (THUNDERWAVE™ compatible)
-POST /api/storage/delete            Xóa file
-POST /api/storage/download_zip      Tải ZIP nhiều file
-POST /api/storage/clear_all         Xóa tất cả file
-POST /api/storage/download_group    Tải theo group_id (1 batch)
+GET  /api/storage/info              Quota, dung lượng đã dùng
+GET  /api/storage/list              Files + folder_id
+GET  /api/storage/download/<file>   Range supported, 64MB chunks
+POST /api/storage/delete            {filenames:[...]}
+POST /api/storage/download_zip      {filenames:[...]}
+POST /api/storage/clear_all
+POST /api/storage/download_group    {group_id}
 ```
 
-### 12.5 Quota Management
-
-```
-User thường:  3 GB mặc định (admin có thể thay đổi)
-Admin:        100 GB (effectively unlimited)
-
-Admin set quota:
-POST /api/admin/set_quota
-  { username, quota_gb }   (0 = unlimited)
-```
-
-### 12.6 Auto Cleanup
+### 14.6 Auto Cleanup
 
 ```python
-# Chạy background mỗi giờ
-def _cleanup_expired_storage_files():
-    # Xóa file quá 15 ngày (TTL)
-    # Cập nhật _meta.json
-    # Log số file đã xóa
+# Background thread mỗi giờ:
+_cleanup_expired_storage_files()
+# Xóa file có expires_ts < now
+# Cập nhật _meta.json
 ```
 
 ---
 
-## 13. Hàng chờ tải (Queue)
+## 15. Hàng chờ (Queue) {#15}
 
-### 13.1 Cấu trúc Queue Item
+### 15.1 Queue Item Format
 
 ```json
 {
   "id": "q_abc123",
   "name": "Video meme buổi sáng",
   "urls": ["url1", "url2", "url3"],
-  "audio": true,
-  "logo_enabled": false,
-  "created_at": 1705309800,
-  "status": "pending"
+  "status": "pending | running | done",
+  "created_at": 1705309800
 }
 ```
 
-### 13.2 API Queue
+### 15.2 Persist + Queue Integration
+
+Khi run_all():
+1. Với mỗi queue item: tạo persist checkpoint riêng
+2. Chạy từng batch tuần tự
+3. Nếu browser đóng → resume phần còn lại khi login lại
+
+### 15.3 API
 
 ```
-POST /api/queue/save        Lưu queue hiện tại
-GET  /api/queue/load        Tải queue đã lưu
-POST /api/queue/clear       Xóa queue
-POST /api/queue/run_all     Chạy tất cả items tuần tự
-```
-
-### 13.3 Queue Run Flow
-
-```
-run_all() →
-  for each item:
-    1. _requireFolderIfNeeded() (nếu save_to_storage)
-    2. batch_start(item.urls)
-    3. Chờ batch hoàn thành
-    4. Báo cáo kết quả
-    5. Chuyển sang item tiếp theo
+POST /api/queue/save
+GET  /api/queue/load
+POST /api/queue/clear
+POST /api/queue/run_all   {items:[{name, urls}], audio, folder_id}
 ```
 
 ---
 
-## 14. Tải đồng loạt (Batch)
+## 16. Tải đồng loạt (Batch) {#16}
 
-### 14.1 BatchJob Architecture
+### 16.1 BatchJob Structure
 
 ```python
 class BatchJob:
-    batch_id: str           # MD5 unique ID
-    urls: list              # Danh sách URL
-    total: int              # Số video
-    owner: str              # Username
-    save_to_storage: bool   # Lưu kho hay không
-    download_direct: bool   # Gửi về máy hay không
-    folder_id: str          # Thư mục lưu
-    group_name: str         # Tên nhóm hiển thị
-
-    # Trạng thái
-    _ok: int                # Số thành công
-    _err: int               # Số lỗi
-    _done_count: int        # Đã xử lý
-
-    # Concurrency
-    sse_q: Queue            # SSE event queue
-    _failed_items: list     # Items cần retry Phase 2
+    batch_id:         str   # MD5 hex ID
+    urls:             list  # Danh sách URLs
+    total:            int   # Số video
+    owner:            str   # Username
+    save_to_storage:  bool
+    download_direct:  bool
+    folder_id:        str   # Giữ nguyên cho TOÀN batch (không clear sớm)
+    group_name:       str   # Hiển thị UI
+    sse_q:            Queue # SSE event queue (per-batch)
+    _ok, _err, _done_count: int
+    _failed_items:    list  # Items cần Phase 2 retry
 ```
 
-### 14.2 Batch Pipeline
-
-```
-Phase 1: Tải song song (ThreadPoolExecutor)
-  ├── Worker 0: download video[0]
-  ├── Worker 1: download video[1]  ← Song song
-  ├── Worker 2: download video[2]
-  └── ...
-
-  Mỗi worker:
-    1. _race_download_to_file()    (4 APIs song song)
-    2. _process_video_file()       (FFmpeg)
-    3. _ensure_valid_mp4()         (Validate)
-    4. save_to_user_storage()      (nếu cần)
-    5. Đăng ký TASK_STORE          (nếu download_direct)
-    6. Push SSE event → Client
-
-Phase 2: Retry failed items
-  ├── _download_with_rotation_retry()
-  └── MAX 5 lần với method rotation
-```
-
-### 14.3 SSE Events
-
-```javascript
-// Client nhận từ /api/batch_stream/<batch_id>
-{
-  event: 'result',
-  data: {
-    index: 3,
-    status: 'done',
-    task_id: 'abc123',    // Để tải file
-    filename: 'video.mp4',
-    title: 'TikTok...',
-    size: 15728640,
-    url: 'https://...',
-    download_direct: true,
-    save_to_storage: true,
-    storage_saved: true,
-    folder_id: 'folder_xyz',
-    expires_days: 15
-  }
-}
-```
-
-### 14.4 Download Modes
+### 16.2 Download Modes
 
 | Mode | `download_direct` | `save_to_storage` | Hành vi |
-|------|------------------|-------------------|---------|
-| Direct | true | false | Gửi về máy ngay |
+|------|-----------------|-------------------|---------|
+| Direct | true | false | Tải về máy ngay |
 | Storage | false | true | Chỉ lưu kho |
-| Both | true | true | Lưu kho + gửi về máy |
+| Both | true | true | Lưu kho + tải về |
+
+### 16.3 SSE Events từ Server
+
+```javascript
+// event: result
+{
+  index, status, task_id, filename, title,
+  size, url, download_direct, save_to_storage,
+  storage_saved, folder_id, expires_days
+}
+
+// event: result_retry  (video fail được retry thành công)
+// event: progress      (per-item progress messages)
+// event: batch_done    (toàn batch xong)
+// event: heartbeat     (1s keep-alive)
+```
+
+### 16.4 Phase 2 Retry
+
+```
+Phase 1: N workers song song (theo hardware tier)
+         ├─ Video 0: race → FFmpeg → done ✓
+         ├─ Video 1: race → fail (4 attempts) ✗
+         └─ Video 2: race → FFmpeg → done ✓
+
+Phase 2: Failed items → rotation retry
+         ├─ Video 1: API[0] → fail
+         ├─ Video 1: API[1] → success ✓
+         └─ Emit 'result_retry' SSE event
+```
 
 ---
 
-## 15. AI Chatbot (EYECORE AI)
+## 17. iOS Delivery {#17}
 
-### 15.1 Tính năng
+### 17.1 Vấn đề
 
-- Hỏi đáp về cách sử dụng web
-- Hỗ trợ tiếng Việt và tiếng Anh
-- Gợi ý tính năng phù hợp
-- Giải thích lỗi và hướng dẫn xử lý
-- Floating button góc phải màn hình
+Safari iOS block `window.open()` từ async SSE handler (mất user gesture context).
 
-### 15.2 Backend
+### 17.2 Fix: Tappable Panel
+
+```javascript
+// Sau khi batch xong trên iOS:
+const panel = document.createElement('div');
+panel.style = 'background:#0a2e1e; border:3px solid #0bf5b0; ...';
+panel.innerHTML = `📱 iOS: Nhấn từng nút để lưu video vào Files`;
+
+_iosLinks.forEach((lnk, i) => {
+    const btn = document.createElement('a');
+    btn.href   = lnk.dlUrl;
+    btn.target = '_blank';
+    btn.style  = 'display:block; background:#0bf5b0; color:#000; ...';
+    btn.textContent = `⬇ Video ${i+1}: ${lnk.filename.substring(0,30)}...`;
+    panel.appendChild(btn);
+});
+progressCard.appendChild(panel);
+```
+
+### 17.3 iOS User Flow
+
+```
+1. Batch hoàn thành
+2. Panel xanh xuất hiện với N nút tappable
+3. User nhấn từng nút → Safari mở tab mới
+4. Long-press video → "Save to Photos" hoặc "Download"
+```
+
+---
+
+## 18. AI Chatbot {#18}
 
 ```
 POST /api/chat
-Body: { message, history }
-Response: { reply }
+Body: { message: "...", history: [...] }
+Response: { reply: "..." }
 ```
 
-Sử dụng Anthropic Claude API (nếu có API key) hoặc rule-based responses.
-
-### 15.3 UI
-
-Chatbot hiển thị dưới dạng floating widget, có thể thu nhỏ/mở rộng, lịch sử chat được giữ trong session.
+Sử dụng Claude API (nếu có API key) hoặc rule-based responses. Floating widget góc phải màn hình. Hỗ trợ tiếng Việt và tiếng Anh.
 
 ---
 
-## 16. Admin Dashboard
-
-### 16.1 Truy cập
+## 19. Admin Dashboard {#19}
 
 ```
-GET /dashboard  (yêu cầu role=admin)
+GET /dashboard   (require role=admin)
 ```
 
-### 16.2 Tính năng
+### 19.1 Tính năng
 
 ```
 Stats overview:
-  - Total visitors (unique IP)
-  - Total requests
-  - Active batches / tasks
-  - Storage usage toàn hệ thống
-  - CPU / RAM realtime
+  Visitors | Requests | Active batches/tasks | Storage usage
 
 User management:
-  - Xem danh sách user
-  - Lock/unlock user
-  - Đổi mật khẩu
-  - Xóa user
-  - Set quota GB
-  - Promote/demote admin
+  Lock/unlock | Change password | Delete | Promote/demote | Set quota
 
 Storage overview:
-  - Tổng dung lượng đang dùng
-  - Per-user breakdown
-  - File count per user
+  Per-user breakdown | File count
 
 Security:
-  - Blocked IPs list
-  - Unblock IP
-  - Request logs
+  Blocked IPs list | Unblock IP
 
 Live stream:
-  - GET /api/admin/dashboard_stream  (SSE)
-  - Update mỗi 3s với stats realtime
+  GET /api/admin/dashboard_stream   SSE, update mỗi 3s
 ```
 
-### 16.3 API Admin Endpoints
+### 19.2 API Admin
 
 ```
-GET  /api/admin/dashboard_stats     Stats tổng hợp
-GET  /api/admin/dashboard_stream    Live stats SSE
-GET  /api/admin/users               Danh sách user
-POST /api/admin/lock_user           Lock/unlock
-POST /api/admin/set_restrictions    Set giới hạn
-POST /api/admin/change_user_password
+GET  /api/admin/dashboard_stats
+GET  /api/admin/dashboard_stream
+GET  /api/admin/users
+POST /api/admin/lock_user
+POST /api/admin/set_quota          {username, quota_gb}  (0 = unlimited)
 POST /api/admin/delete_user
-POST /api/admin/promote_user        Lên/xuống admin
-POST /api/admin/set_quota           Set quota GB
-GET  /api/admin/storage_overview    Storage per user
-GET  /api/security/status           Security stats
-POST /api/security/unblock          Unblock IP
+POST /api/admin/promote_user
+GET  /api/admin/storage_overview
+GET  /api/security/status
+POST /api/security/unblock
 ```
 
 ---
 
-## 17. Bảo mật hệ thống
+## 20. Bảo mật hệ thống {#20}
 
-### 17.1 Các lớp bảo vệ
+### 20.1 Các lớp bảo vệ
 
 ```
-Layer 1: Rate Limiting
-  - Guest: 10 downloads/ngày
-  - Per-IP: Tự động monitor
+Layer 1: URL Validation
+  Allowed: tiktok.com, vm.tiktok.com, vt.tiktok.com, m.tiktok.com
 
-Layer 2: Behavioral Guard
-  - Phát hiện pattern bất thường
-  - Block IP sau N lần thất bại
-  - Thời gian block tự động
+Layer 2: Guest Rate Limiting
+  10 downloads/ngày/IP
 
-Layer 3: Session Security
-  - Session secret tự generate
-  - HTTPOnly cookies
-  - CSRF protection via same-origin
+Layer 3: Behavioral Guard
+  N lần fail liên tiếp → Block IP (adaptive backoff)
 
-Layer 4: Input Validation
-  - URL validation (TikTok domain only)
-  - Path traversal prevention
-  - Filename sanitization
+Layer 4: Session Security
+  Secret: auto-generated khi khởi động
+  Cookies: HTTPOnly, SameSite
 
-Layer 5: Admin Protection
-  - Role-based access control
-  - All admin routes @require_admin
-  - Audit logging
-```
-
-### 17.2 Validated TikTok URLs
-
-```python
-# Chỉ chấp nhận URLs từ:
-- tiktok.com
-- www.tiktok.com
-- vm.tiktok.com
-- vt.tiktok.com
-- m.tiktok.com
-```
-
-### 17.3 Filename Sanitization
-
-```python
-def safe_filename(title, video_id, features=[]):
-    # Loại bỏ ký tự nguy hiểm
-    # Max length 200 ký tự
-    # Unicode normalization
-    # Format: {sanitized_title}_{video_id}_{features}.mp4
+Layer 5: Input Sanitization
+  Filename: sanitize chars, max 200 chars, unicode normalization
+  Path traversal: os.path.basename() + chroot to storage dir
 ```
 
 ---
 
-## 18. API Reference đầy đủ
+## 21. API Reference đầy đủ {#21}
 
 ### Core Download
 
 ```
 POST /api/download_async
-  Body: {url, audio, logo_enabled, logo_base64, logo_x, logo_y,
-         logo_width, logo_height, save_to_storage, download_direct,
-         group_id, group_name, folder_id}
-  Response: {task_id, status, owner, save_to_storage, download_direct}
+  {url, audio, logo_enabled, logo_base64, logo_x, logo_y,
+   logo_width, logo_height, save_to_storage, download_direct,
+   group_id, group_name, folder_id}
+  → {task_id, status, owner, save_to_storage}
 
-GET  /api/stream/<task_id>
-  SSE events: status | storage_saved | heartbeat | error
-
-GET  /api/get_result/<task_id>
-  Response: video/mp4 binary (Range request supported)
-  Headers: Content-Disposition, Accept-Ranges, Content-Length
-
-GET  /api/task_status/<task_id>
-  Response: {task_id, status, filename, size, title, method, error, url}
-
+GET  /api/stream/<task_id>         SSE: status|heartbeat|storage_saved
+GET  /api/get_result/<task_id>     Video binary (Range: bytes=X-Y supported)
+GET  /api/task_status/<task_id>    {status, filename, size, title, error}
 POST /api/cancel_task/<task_id>
 POST /api/cancel_all
+POST /api/check_urls               {urls[]} → {valid, invalid, duplicates}
+GET  /api/get_video_info           {url} → {title, duration, author, thumbnail}
 ```
 
 ### Batch
 
 ```
 POST /api/batch_start
-  Body: {urls[], audio, logo_*, download_direct, save_to_storage,
-         group_name, folder_id}
-  Response: {batch_id, total}
+  {urls[], audio, logo_*, download_direct, save_to_storage,
+   group_name, folder_id}
+  → {batch_id, total}
 
 GET  /api/batch_stream/<batch_id>
   SSE: result | result_retry | progress | batch_done | heartbeat
@@ -1062,28 +1108,16 @@ GET  /api/batch_status/<batch_id>
 GET  /api/batch_item_msgs/<batch_id>/<index>
 ```
 
-### URL Check
-
-```
-POST /api/check_urls
-  Body: {urls[]}
-  Response: {valid[], invalid[], duplicates[], counts}
-
-GET  /api/get_video_info
-  Body: {url}
-  Response: {title, duration, author, thumbnail, ...}
-```
-
 ### Storage
 
 ```
 GET  /api/storage/info
-GET  /api/storage/list
-GET  /api/storage/download/<filename>   (Range request supported)
-POST /api/storage/delete                {filenames[]}
-POST /api/storage/download_zip          {filenames[]}
+GET  /api/storage/list              → files[{filename, size, folder_id, ...}]
+GET  /api/storage/download/<file>   Range supported
+POST /api/storage/delete            {filenames:[...]}
+POST /api/storage/download_zip
 POST /api/storage/clear_all
-POST /api/storage/download_group        {group_id} or {day}
+POST /api/storage/download_group    {group_id}
 ```
 
 ### THUNDERWAVE™
@@ -1091,29 +1125,37 @@ POST /api/storage/download_group        {group_id} or {day}
 ```
 GET /api/thunderwave/manifest/<task_id>
 GET /api/thunderwave/manifest/storage/<filename>
-Response: {ok, mode, filename, size, workers, chunk_size, ranges[], protocol}
+→ {ok, protocol, filename, size, workers, chunk_size, ranges[]}
 ```
 
 ### KeepLink™
 
 ```
-GET/POST /api/keeplink/ping?sid=<session_id>
-GET      /api/keeplink/stream?sid=<session_id>
+GET /api/keeplink/stream?sid=<id>   SSE: kl_heartbeat mỗi 15s
 ```
 
 ### Realtime Push
 
 ```
-GET /api/realtime/subscribe   (SSE, requires auth)
-Events: rt_connected | rt_heartbeat | storage_update | auth_change | system_notice
+GET /api/realtime/subscribe
+SSE: rt_connected | rt_heartbeat | storage_update | auth_change | system_notice
 ```
 
 ### WebRTC
 
 ```
-POST /api/webrtc/offer    {sdp, type, task_id, filename}
-POST /api/webrtc/ice      {session_id, candidate}
+POST /api/webrtc/offer    → {ok, session_id, answer, transport}
+POST /api/webrtc/ice
 GET  /api/webrtc/status/<session_id>
+```
+
+### Persist/Checkpoint
+
+```
+POST /api/persist/submit      Lưu checkpoint (không start batch)
+POST /api/persist/mark_done   {pids:[...]}
+GET  /api/persist/status      [{pid, name, status, total, batch_id}]
+POST /api/persist/resume      Resume pending → BatchJob (download_direct=false)
 ```
 
 ### Queue
@@ -1139,14 +1181,12 @@ POST /api/auth/change_password
 
 ```
 GET  /api/admin/dashboard_stats
-GET  /api/admin/dashboard_stream
+GET  /api/admin/dashboard_stream   SSE, 3s update
 GET  /api/admin/users
 POST /api/admin/lock_user
-POST /api/admin/set_restrictions
-POST /api/admin/change_user_password
+POST /api/admin/set_quota          {username, quota_gb}
 POST /api/admin/delete_user
 POST /api/admin/promote_user
-POST /api/admin/set_quota
 GET  /api/admin/storage_overview
 GET  /api/security/status
 POST /api/security/unblock
@@ -1155,144 +1195,207 @@ POST /api/security/unblock
 ### System
 
 ```
-GET  /api/health            Server health check
-GET  /api/client_info       Client info (UA, IP, mobile/desktop)
-GET  /api/speedtest_payload Payload để đo tốc độ
-POST /api/cleanup           Dọn file tạm
-POST /api/cleanup_ramdisk   Dọn RAM disk
-POST /api/reload_cookies    Reload TikTok cookies
-POST /api/set_cookies       Set cookies mới
-GET  /api/logs              Server logs (admin)
-POST /api/server_reload     Reload server (admin)
-GET  /api/reload_stream     SSE stream khi reload
-POST /api/chat              AI Chatbot
-GET  /api/visitors          Visitor stats
-GET  /api/link_stats        Download link stats
+GET  /api/health
+GET  /api/client_info
+GET  /api/speedtest_payload
+POST /api/cleanup
+POST /api/cleanup_ramdisk
+POST /api/reload_cookies
+POST /api/chat
+GET  /api/visitors
+GET  /api/link_stats
+POST /api/server_reload
+GET  /api/reload_stream
 ```
 
 ---
 
-## 19. Cấu trúc thư mục
+## 22. Cấu trúc thư mục {#22}
 
 ```
 eyecore_downloader/
-├── app.py                  # Server chính (~9500 dòng)
-├── index.html              # Frontend (~9200 dòng)
-├── requirements.txt        # Python dependencies
-├── visitors.json           # Visitor tracking
+├── app.py                    (~9.700 dòng) — Server
+├── index.html                (~9.400 dòng) — Frontend
 │
-├── user_storage/           # Kho lưu trữ video
-│   ├── admin/
-│   │   ├── _meta.json
-│   │   └── *.mp4
-│   ├── alice/
-│   └── bob/
+├── user_storage/             — Kho video
+│   └── {username}/
+│       ├── _meta.json        ← metadata + folder_id
+│       └── *.mp4
 │
-├── logs/                   # Server logs
+├── pending_persist/          — Checkpoint files
+│   └── {pid}.json            ← {status: pending|done}
+│
+├── logs/                     — Server logs
 │   ├── app.log
 │   ├── error.log
 │   └── process.log
 │
-└── /tmp hoặc /dev/shm/     # RAM disk (file tạm)
-    ├── raw_*.mp4           # File thô từ API
-    ├── proc_*.mp4          # File sau FFmpeg
-    └── ensured_*.mp4       # File sau ensure layer
+├── cookies.txt               — TikTok cookies (optional)
+├── users.json                — User database
+├── visitors.json             — Visitor tracking
+│
+└── /dev/shm/ (Linux RAM disk)
+    ├── raw_*.mp4             ← File thô từ API
+    ├── proc_*.mp4            ← File sau FFmpeg
+    ├── ensured_*.mp4         ← File sau ensure
+    └── s0_repair_*.mp4       ← Pre-repair temp
 ```
 
 ---
 
-## 20. Troubleshooting
+## 23. Troubleshooting {#23}
 
-### Lỗi thường gặp
+### "Video báo hoàn thành nhưng chưa tải được"
 
-#### `invalid data found when processing input`
 ```
-Nguyên nhân: TikTok MP4 có corrupt B-frames
-Fix tự động:
-  1. S1: genpts + copyts + vsync vfr
-  2. S2: Re-remux → MKV → encode
-  3. S3: Force -t [duration]
-  4. S4: Brute force, chấp nhận output > 50KB
-```
+Đã fix trong v10.5.0 (3 bugs):
+  Bug 1: persist_submit tạo duplicate batch → RTPC fires sớm
+  Bug 2: result_retry tăng finalizedCount trước download
+  Bug 3: _resolvePoller không check allStarted
 
-#### `real_truncation (ratio < 25%)`
-```
-Nguyên nhân: FFmpeg dừng encode sớm do container broken
-Fix:
-  - Threshold mới: 25% (từ 35%)
-  - 4 chiến lược recovery (xem mục 6.3)
+Nếu vẫn xảy ra:
+  F12 → Console → tìm dòng "XONG" hoặc "_resolved = true"
+  Kiểm tra finalizedCount vs total tại thời điểm đó
+  Xóa cache trình duyệt → thử lại
 ```
 
-#### Video không thêm vào thư mục
+### "Video không hiện trong Storage tab"
+
 ```
-Nguyên nhân: folder_id không được gửi hoặc nhận
+Đã fix trong v10.5.0:
+  IIFE storageRefresh bây giờ gọi storageRenderFiles() đúng cách
+
+Kiểm tra thủ công:
+  Network tab → /api/storage/list → có file không?
+  Console → window.storageRefresh() → tab có cập nhật không?
+```
+
+### "Video không vào đúng thư mục"
+
+```
+Đã fix trong v10.4.0:
+  - Duplicate intercept bị xóa
+  - folder_id gửi từ client → server → metadata → SSE → client
+  - _sfSyncFromServer() sync lại khi storageRefresh
+
 Kiểm tra:
-  1. folder_id trong batch payload: console.log(_bFolderId)
-  2. Server metadata: cat user_storage/{user}/_meta.json
-  3. Client localStorage: localStorage.getItem('tikdown_sf_filemap')
-Fix:
-  - Chọn thư mục trước khi tải (modal folder picker)
-  - storageRefresh() sẽ sync từ server qua _sfSyncFromServer()
+  Server: cat user_storage/{user}/_meta.json | python3 -m json.tool
+    → "folder_id": "..." phải có giá trị
+  Client: localStorage.getItem('tikdown_sf_filemap')
+    → {filename: folder_id} phải khớp
 ```
 
-#### iOS không nhận video
+### "Truncation: FFmpeg output ngắn hơn input"
+
 ```
-Nguyên nhân: window.open() bị Safari iOS block từ async context
-Fix:
-  - Sau batch xong → panel màu xanh với nút <a> tappable
-  - User nhấn từng nút để mở/lưu video
+✗ [validate_output] REAL TRUNCATION: ratio=31% out=7.1s ref=23.1s
+
+Xử lý tự động:
+  S0: Pre-repair container (probesize=200M -c copy)
+  S1: genpts + copyts + vsync vfr
+  S2: Re-remux → MKV → encode
+  S3: Force -t [duration]
+  S4: Brute force probesize=500M
+  S5: Trả raw file nếu playable (last resort)
+
+→ 100% target: user luôn nhận được video
 ```
 
-#### SSE bị ngắt giữa chừng
+### "iOS không tải được video"
+
 ```
-Fix tự động:
-  - KeepLink™ phát hiện trong < 4s (từ 6s)
-  - Reconnect với jitter backoff: 1s → 2s → 4s → 8s
-  - Fallback sang polling /api/task_status
+Không dùng window.open() nữa (bị Safari block từ async).
+Giải pháp: Panel tappable sau khi batch xong.
+
+Hướng dẫn:
+  1. Đợi batch hoàn thành (panel xanh xuất hiện)
+  2. Nhấn nút "⬇ Video N: ..."
+  3. Safari mở tab mới hiển thị video
+  4. Long-press → "Add to Photos" hoặc "Download"
 ```
 
-#### FFmpeg không tìm thấy
-```bash
-# Ubuntu
-sudo apt install ffmpeg
+### "SSE bị ngắt giữa chừng"
 
-# Kiểm tra
-ffmpeg -version
-ffprobe -version
+```
+KeepLink™ v3 tự phục hồi:
+  - Watchdog phát hiện trong 20s (server heartbeat 15s)
+  - Backoff: 2→4→8→16s + jitter 300ms
+  - Tab visible lại → reconnect ngay (200ms)
+  - Batch có fallback polling qua /api/batch_status
 ```
 
-#### Kho đầy (quota exceeded)
+### "Quota đầy"
+
 ```
-User: liên hệ admin
-Admin: POST /api/admin/set_quota {username, quota_gb}
-       0 = unlimited
+User: Liên hệ admin
+Admin: POST /api/admin/set_quota { "username": "alice", "quota_gb": 10 }
+       quota_gb = 0 → unlimited
 ```
 
 ---
 
-## 21. Changelog
+## 24. Changelog đầy đủ {#24}
 
-### v10.4.0 — TURBO FULL (hiện tại)
+### v10.5.0 (Tháng 5/2025) — CRITICAL FIXES
 
-**Fixes**:
-- ✅ Fix folder bug: Bỏ duplicate intercept trong `_initStorageFolder` — folder picker chỉ hiện 1 lần
-- ✅ Fix iOS delivery: window.open() → tappable link panel sau batch
-- ✅ Fix truncation: threshold 35% → 25%, thêm S2/S3/S4 strategies
-- ✅ Fix 720p: upscale ngay tại `_ensure_valid_mp4` Layer 1
+**Bug Fixes**:
+
+| Bug | Nguyên nhân | Fix |
+|-----|------------|-----|
+| "Báo xong sớm" #1 | `persist_submit` chạy duplicate batch → RTPC fires sớm → client tưởng xong | Checkpoint-only: không start batch |
+| "Báo xong sớm" #2 | `result_retry` tăng `finalizedCount` ngay khi retry thành công, không đợi download | Không tăng ở retry; đã tăng lúc fail |
+| "Báo xong sớm" #3 | `_resolvePoller` không check `allStarted` → fire khi fetch chưa bắt đầu | Thêm `allEventsIn && allStarted` |
+| Storage không hiện | IIFE `storageRefresh` không gọi `storageRenderFiles()` | Gọi đủ 4 functions |
 
 **New Features**:
-- ⚡ THUNDERWAVE™ Protocol v1.0 — parallel N-stream delivery ~50MB/s
-- 📡 EYECORE RTPC™ — real-time push, không cần F5
-- 🌐 WebRTC Bridge v1.0 — signaling infrastructure
-- 🔗 EYECORE KeepLink™ v2 — 1s heartbeat, 4s timeout, jitter backoff
+- Checkpoint system v2: `persist/submit` → `persist/mark_done` → `persist/resume`
+- Auto-resume on login: RTPC `auth_change` → check pending → toast + resume
+- `_fetchStarted` counter: track fetch khởi động để `tryResolve` chính xác
+- `doPoll` retry path: thêm `pendingFetch` tracking + `.finally()` handler
+
+---
+
+### v10.4.0 — TURBO + EYECORE PROTOCOLS
+
+**Bug Fixes**:
+- Fix folder bug: Xóa duplicate `startDownload` intercept trong `_initStorageFolder`
+- `storageOnDownloadDone` dùng `evtData.folder_id` từ server (không dùng `_pendingFolderId`)
+- `_sfAssignFileExplicit`: không clear `_pendingFolderId` sớm
+- `_sfBatchDone()`: clear sau khi toàn batch xong (không phải sau video đầu)
+- `_sfSyncFromServer()`: sync server folder_id vào localStorage
+- iOS: tappable link panel thay vì `window.open()` bị block
+
+**New Protocols**:
+- THUNDERWAVE™ v2.0: adaptive workers + 512KB speed probe + queue 1-at-a-time
+- KeepLink™ v3: single SSE, no HTTP ping, watchdog 20s, < 1KB/min
+- RTPC™: SSE push all state changes, auto-refresh, resume on login
+- WebRTC Bridge v1.0: SDP signaling + THUNDERWAVE transport
+- Background persist v1: checkpoint files + resume endpoint
 
 **Performance**:
-- 🚀 Chunk: 8MB → max 64MB (8× throughput)
-- 🚀 CPU: 90% → 100% cores (max 32)
-- 🚀 SSE heartbeat: 3s → 1s (phát hiện disconnect nhanh hơn)
-- 🚀 ffprobe cache: tránh gọi lặp trong 30s
-- 🚀 probesize: default → 100M (đọc container đúng hơn)
-- 🚀 Thread pool URL check: 4 → min(10, CPU_COUNT)
+- Chunk: 8MB → max 64MB
+- CPU: 90% → 100% cores (max 32)
+- KeepLink heartbeat: 2s → 15s (-87% bandwidth)
+- SSE batch heartbeat: 3s → 1s
+
+---
+
+### v10.3.0 — ROBUST PROCESSING
+
+**Bug Fixes**:
+- Truncation threshold: 35% → 25% (TikTok container sai metadata tới 70%)
+- S0 pre-repair strategy (trước S1–S4)
+- S5 raw file fallback (đảm bảo 100%)
+- 720p upscale tại `_ensure_valid_mp4` Layer 1
+- `-ignore_unknown` flag added
+
+**Performance**:
+- Chunk: 8MB → 64MB (8× throughput)
+- CPU: 90% → 100% cores
+- SSE heartbeat: 3s → 1s
+- ffprobe cache 30s TTL
+- Thread pool: 4 → min(10, CPU)
+- probesize: default → 100M
 
 ---
 
@@ -1300,19 +1403,23 @@ Admin: POST /api/admin/set_quota {username, quota_gb}
 
 | Thuật ngữ | Định nghĩa |
 |-----------|-----------|
-| **THUNDERWAVE™** | EYECORE parallel download protocol, N streams |
-| **KeepLink™** | EYECORE connection persistence system |
-| **RTPC™** | Realtime Push Channel — server push events |
-| **SSE** | Server-Sent Events — one-way server→client stream |
-| **mmap** | Memory-mapped file I/O — zero-copy file serving |
-| **VFR** | Variable Frame Rate — nhiều TikTok video có FPS không đều |
-| **elst** | Edit List atom trong MP4 — gây metadata sai trên TikTok |
-| **PATH A** | Stream copy (không encode, 0–1s) |
-| **PATH B** | Full encode với FFmpeg (1–30s) |
-| **Truncation** | Video output ngắn hơn input do FFmpeg dừng sớm |
-| **Race download** | Chạy N APIs song song, lấy kết quả nhanh nhất |
-| **TASK_STORE** | Dict in-memory lưu trạng thái download task |
-| **BATCH_STORE** | Dict in-memory lưu trạng thái batch job |
+| **THUNDERWAVE™ v2** | Adaptive N-stream parallel delivery; queue 1-at-a-time; < bandwidth v1 |
+| **KeepLink™ v3** | Single SSE; no HTTP ping; watchdog 20s; < 1KB/min |
+| **RTPC™** | Realtime Push Channel; SSE broadcast mọi state change |
+| **Checkpoint** | JSON file lưu URLs → resume sau browser đóng |
+| **finalizedCount** | Video đã kết thúc (ok+fail). Desktop: tăng SAU khi blob download xong |
+| **pendingFetch** | Số `fetch()` đang active |
+| **_fetchStarted** | Tổng `_fetchAndSave` đã gọi — guard cho tryResolve |
+| **allStarted** | `_fetchStarted >= total` |
+| **tryResolve** | Check 4 điều kiện → "XONG" |
+| **PATH A** | Stream copy (0–1s): H264 + ≥720p + no logo + no compress |
+| **PATH B** | Full encode (1–30s): scale + logo + CRF23 |
+| **S0–S5** | 6 strategies truncation recovery (S5 = last resort raw file) |
+| **elst** | Edit List atom MP4 — gây TikTok metadata sai duration |
+| **VFR** | Variable Frame Rate — nhiều TikTok video FPS không đều |
+| **IIFE** | Immediately Invoked Function Expression |
+| **Race download** | N APIs chạy song song → lấy kết quả nhanh nhất |
+| **Rotation retry** | Thử từng API 1 lần theo vòng xoay sau khi race fail |
 
 ---
 
@@ -1320,15 +1427,19 @@ Admin: POST /api/admin/set_quota {username, quota_gb}
 
 | Scenario | Thời gian |
 |----------|-----------|
-| Tải 1 video (H264, stream copy) | 0.5–2s |
-| Tải 1 video (encode 720p) | 3–15s |
-| Batch 10 video (song song) | 15–60s |
-| Truyền file 50MB (LAN) | ~1s (THUNDERWAVE™ 6 streams) |
-| Truyền file 200MB (LAN) | ~4s (THUNDERWAVE™ 8 streams) |
-| FFmpeg encode 1080p→720p | 5–20s (phụ thuộc CPU) |
+| 1 video H264 ≥720p stream copy | 0.5–2s |
+| 1 video encode 720p (i7-8th) | 3–10s |
+| 1 video encode 720p (Celeron) | 10–30s |
+| Batch 10 video (STRONG) | 15–60s |
+| Batch 50 video | 5–15 phút |
+| THUNDERWAVE™ 50MB (LAN 1Gbps, 6 streams) | ~1s |
+| THUNDERWAVE™ 200MB (LAN 1Gbps, 8 streams) | ~4s |
 | Storage list refresh | < 200ms |
-| RTPC event lag | < 50ms |
+| RTPC event lag | < 50ms LAN |
+| KeepLink reconnect | < 300ms |
+| Checkpoint submit (100 URLs) | < 500ms |
+| Resume on login | < 1s detect, ~2s start |
 
 ---
 
-*Tài liệu này được tạo tự động từ source code. Cập nhật lần cuối: v10.4.0-TURBO-FULL*
+*Cập nhật: v10.5.0 — Tháng 5 năm 2025*
